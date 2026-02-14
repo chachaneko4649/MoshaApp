@@ -3,64 +3,40 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>KAZUさんの模写アプリ_決定版</title>
+    <title>KAZUさんの模写アプリ_最終版</title>
     <style>
-        /* 100dvhが使えないPCブラウザ向けに、flexを使って画面いっぱいに広げる設定ばい */
-        html, body {
-            margin: 0; padding: 0;
-            height: 100%; width: 100%;
-            overflow: hidden;
-            background-color: #222; /* 背景を暗くして集中しやすく */
-            font-family: sans-serif;
-        }
+        html, body { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; background: #222; font-family: sans-serif; }
+        body { display: flex; flex-direction: column; }
 
-        body {
-            display: flex;
-            flex-direction: column;
-        }
-
-        /* 上下エリアを50%ずつに固定（flex: 1） */
-        #top-area, #bottom-area {
-            flex: 1;
-            position: relative;
-            overflow: hidden;
-            width: 100%;
-        }
-
-        #top-area { background: #eee; border-bottom: 2px solid #444; }
+        /* 上下エリアの確保 */
+        #top-area, #bottom-area { flex: 1; position: relative; overflow: hidden; width: 100%; }
+        #top-area { background: #444; border-bottom: 2px solid #000; }
         #bottom-area { background: #fff; touch-action: none; }
 
-        /* 画像とキャンバスを動かすためのコンテナ */
-        .zoom-container {
-            width: 100%; height: 100%;
+        /* 画像表示の修正：確実に真ん中に、かつ拡大可能に */
+        .img-layer { 
+            position: absolute; width: 100%; height: 100%;
             display: flex; align-items: center; justify-content: center;
-            transform-origin: 0 0;
-            cursor: crosshair;
+            pointer-events: none; /* 下のコンテナにイベントを渡す */
+        }
+        #preview { max-width: 100%; max-height: 100%; object-fit: contain; }
+
+        /* 描画レイヤー */
+        canvas { width: 100%; height: 100%; display: block; }
+
+        /* 操作系 */
+        .controls-top { position: absolute; top: 10px; left: 10px; z-index: 1000; }
+        .toolbar { 
+            position: absolute; bottom: 25px; left: 10px; right: 10px; 
+            z-index: 1000; display: flex; flex-wrap: wrap; gap: 8px; 
+            background: rgba(0,0,0,0.85); padding: 12px; border-radius: 12px; 
+            justify-content: center; align-items: center; color: white;
         }
 
-        #preview {
-            max-width: 100%; max-height: 100%;
-            pointer-events: none;
-            object-fit: contain;
-        }
-
-        /* メニュー周り：Androidのバー対策で少し浮かせる */
-        .controls-top {
-            position: absolute; top: 10px; left: 10px; z-index: 100;
-        }
-        .toolbar {
-            position: absolute; bottom: 30px; left: 10px; right: 10px;
-            z-index: 100; display: flex; flex-wrap: wrap; gap: 8px;
-            background: rgba(0,0,0,0.8); padding: 12px; border-radius: 12px;
-            justify-content: center; align-items: center;
-        }
-
-        label, button {
-            background: #555; color: white; padding: 8px 14px;
-            border-radius: 6px; font-size: 14px; border: none; cursor: pointer;
-        }
+        label, button { background: #555; color: white; padding: 8px 12px; border-radius: 6px; font-size: 13px; border: none; cursor: pointer; }
         .active { background: #007bff !important; }
-        #btn-eraser.active { background: #dc3545 !important; }
+        input[type="range"] { width: 70px; margin: 0 5px; vertical-align: middle; }
+        span { font-size: 12px; }
     </style>
 </head>
 <body>
@@ -70,8 +46,10 @@
             <label for="file-upload">画像を選択</label>
             <input type="file" id="file-upload" accept="image/*" style="display:none;">
         </div>
-        <div id="img-container" class="zoom-container">
-            <img id="preview" src="" alt="ここにお手本が表示されるばい">
+        <div id="img-container" style="width:100%; height:100%; transform-origin: 0 0;">
+            <div class="img-layer">
+                <img id="preview" src="" alt="">
+            </div>
         </div>
     </div>
 
@@ -80,10 +58,12 @@
             <button id="btn-pen" class="active" onclick="setTool('pen')">ペン</button>
             <button id="btn-eraser" onclick="setTool('eraser')">消しゴム</button>
             <button id="btn-move" onclick="setTool('move')">移動/拡大</button>
+            <span>太さ:</span>
+            <input type="range" id="pen-size" min="1" max="30" value="3">
             <button onclick="undo()">戻る</button>
-            <button onclick="clearCanvas()" style="background:#777;">消去</button>
+            <button onclick="clearCanvas()" style="background:#d9534f;">全消去</button>
         </div>
-        <div id="canvas-container" class="zoom-container">
+        <div id="canvas-container" style="width:100%; height:100%; transform-origin: 0 0;">
             <canvas id="canvas"></canvas>
         </div>
     </div>
@@ -94,69 +74,148 @@
         const img = document.getElementById('preview');
         const imgContainer = document.getElementById('img-container');
         const canvasContainer = document.getElementById('canvas-container');
+        const penSize = document.getElementById('pen-size');
 
         let tool = 'pen';
-        let drawing = false;
+        let isDrawing = false;
         let history = [];
         let historyStep = -1;
 
         let states = {
-            top: { scale: 1, x: 0, y: 0, lastX: 0, lastY: 0 },
-            bottom: { scale: 1, x: 0, y: 0, lastX: 0, lastY: 0 }
+            top: { scale: 1, x: 0, y: 0 },
+            bottom: { scale: 1, x: 0, y: 0 }
         };
 
-        // 画面サイズに合わせてキャンバスをリサイズする関数
-        function resize() {
+        // 初期化：キャンバスサイズを確定させる
+        function init() {
             const rect = document.getElementById('bottom-area').getBoundingClientRect();
             canvas.width = rect.width;
             canvas.height = rect.height;
-            // リサイズすると中身が消えるので、履歴から復元（あれば）
-            if (historyStep >= 0) loadHistory();
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
-            ctx.lineWidth = 3;
+            if (historyStep === -1) saveHistory();
         }
-
-        window.addEventListener('resize', resize);
-        window.addEventListener('DOMContentLoaded', () => {
-            resize();
-            saveHistory();
-        });
+        window.onload = init;
+        window.onresize = init;
 
         function setTool(t) {
             tool = t;
-            document.getElementById('btn-pen').className = (t === 'pen' ? 'active' : '');
-            document.getElementById('btn-eraser').className = (t === 'eraser' ? 'active' : '');
-            document.getElementById('btn-move').className = (t === 'move' ? 'active' : '');
+            document.getElementById('btn-pen').classList.toggle('active', t === 'pen');
+            document.getElementById('btn-eraser').classList.toggle('active', t === 'eraser');
+            document.getElementById('btn-move').classList.toggle('active', t === 'move');
         }
 
+        // 入力処理（PC・スマホ両対応）
         let touchStartDist = 0;
         let initialScale = 1;
+        let lastX = 0, lastY = 0;
 
-        // タッチとマウスの両方に対応したイベント処理
         function handleInput(e) {
-            const isTouch = e.type.includes('touch');
+            e.preventDefault();
+            const rect = e.currentTarget.getBoundingClientRect();
             const targetId = e.currentTarget.id === 'top-area' ? 'top' : 'bottom';
             const state = states[targetId];
             const container = targetId === 'top' ? imgContainer : canvasContainer;
 
-            if (isTouch && e.touches.length === 2) {
+            const getClientPos = (evt) => {
+                if (evt.touches && evt.touches.length > 0) {
+                    return { x: evt.touches[0].clientX, y: evt.touches[0].clientY };
+                }
+                return { x: evt.clientX, y: evt.clientY };
+            };
+
+            const pos = getClientPos(e);
+            const canvasX = (pos.x - rect.left - state.x) / state.scale;
+            const canvasY = (pos.y - rect.top - state.y) / state.scale;
+
+            if (e.touches && e.touches.length === 2) {
                 // ピンチズーム
                 const dist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
                 if (e.type === 'touchstart') {
                     touchStartDist = dist;
                     initialScale = state.scale;
-                } else {
+                } else if (e.type === 'touchmove') {
                     state.scale = initialScale * (dist / touchStartDist);
                 }
             } else {
-                // 1本指またはマウス
-                const clientX = isTouch ? e.touches[0].clientX : e.clientX;
-                const clientY = isTouch ? e.touches[0].clientY : e.clientY;
-                const rect = e.currentTarget.getBoundingClientRect();
-                
-                const canvasX = (clientX - rect.left - state.x) / state.scale;
-                const canvasY = (clientY - rect.top - state.y) / state.scale;
+                // 描画 or 移動
+                if (e.type === 'touchstart' || e.type === 'mousedown') {
+                    if (tool === 'move' || targetId === 'top') {
+                        state.isMoving = true;
+                        lastX = pos.x; lastY = pos.y;
+                    } else if (targetId === 'bottom') {
+                        isDrawing = true;
+                        ctx.beginPath();
+                        ctx.moveTo(canvasX, canvasY);
+                    }
+                } else if (e.type === 'touchmove' || e.type === 'mousemove') {
+                    if (state.isMoving) {
+                        state.x += pos.x - lastX;
+                        state.y += pos.y - lastY;
+                        lastX = pos.x; lastY = pos.y;
+                    } else if (isDrawing) {
+                        ctx.lineWidth = penSize.value;
+                        ctx.strokeStyle = (tool === 'eraser') ? '#fff' : '#333';
+                        ctx.lineTo(canvasX, canvasY);
+                        ctx.stroke();
+                    }
+                } else {
+                    if (isDrawing) { isDrawing = false; saveHistory(); }
+                    state.isMoving = false;
+                }
+            }
+            container.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
+        }
 
-                if (tool === 'move' || targetId === 'top') {
-                    if (e.type
+        // イベント設定
+        ['top-area', 'bottom-area'].forEach(id => {
+            const el = document.getElementById(id);
+            el.addEventListener('mousedown', handleInput);
+            el.addEventListener('mousemove', handleInput);
+            window.addEventListener('mouseup', handleInput);
+            el.addEventListener('touchstart', handleInput, {passive: false});
+            el.addEventListener('touchmove', handleInput, {passive: false});
+            el.addEventListener('touchend', handleInput, {passive: false});
+        });
+
+        // 画像読み込みの修正
+        document.getElementById('file-upload').onchange = (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    img.src = ev.target.result;
+                    img.onload = () => {
+                        // 読み込み時にリセット
+                        states.top = { scale: 1, x: 0, y: 0 };
+                        imgContainer.style.transform = `translate(0px, 0px) scale(1)`;
+                    };
+                };
+                reader.readAsDataURL(file);
+            }
+        };
+
+        function saveHistory() {
+            if (historyStep < history.length - 1) history = history.slice(0, historyStep + 1);
+            history.push(canvas.toDataURL());
+            historyStep++;
+        }
+
+        function undo() {
+            if (historyStep > 0) {
+                historyStep--;
+                const i = new Image();
+                i.src = history[historyStep];
+                i.onload = () => { ctx.clearRect(0,0,canvas.width,canvas.height); ctx.drawImage(i,0,0); };
+            }
+        }
+
+        function clearCanvas() {
+            if(confirm('全部消してもよかですか？')) {
+                ctx.clearRect(0,0,canvas.width,canvas.height);
+                saveHistory();
+            }
+        }
+    </script>
+</body>
+</html>
