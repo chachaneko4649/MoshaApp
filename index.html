@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>KAZUさんの模写アプリ_修正版</title>
+    <title>KAZUさんの模写アプリ_決定版V2</title>
     <style>
         html, body { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; background: #222; font-family: sans-serif; }
         body { display: flex; flex-direction: column; }
@@ -43,9 +43,10 @@
             <button id="btn-eraser" onclick="setTool('eraser')">消しゴム</button>
             <button id="btn-move" onclick="setTool('move')">移動/拡大</button>
             <span>太さ:</span>
-            <input type="range" id="pen-size" min="1" max="30" value="3">
+            <input type="range" id="pen-size" min="1" max="50" value="5">
             <button onclick="undo()">戻る</button>
-            <button onclick="clearCanvas()" style="background:#d9534f;">全消去</button>
+            <button onclick="redo()">進む</button>
+            <button onclick="clearCanvas()" style="background:#d9534f;">消去</button>
         </div>
         <div id="canvas-container" style="width:100%; height:100%; transform-origin: 0 0;">
             <canvas id="canvas"></canvas>
@@ -58,17 +59,16 @@
         const img = document.getElementById('preview');
         const imgContainer = document.getElementById('img-container');
         const canvasContainer = document.getElementById('canvas-container');
-        const penSize = document.getElementById('pen-size');
+        const penSizeInput = document.getElementById('pen-size');
 
         let tool = 'pen';
         let isDrawing = false;
-        let isMoving = false;
         let history = [];
         let historyStep = -1;
 
         let states = {
-            top: { scale: 1, x: 0, y: 0 },
-            bottom: { scale: 1, x: 0, y: 0 }
+            top: { scale: 1, x: 0, y: 0, isMoving: false },
+            bottom: { scale: 1, x: 0, y: 0, isMoving: false }
         };
 
         function init() {
@@ -77,7 +77,8 @@
             canvas.height = rect.height;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
-            if (historyStep === -1) saveHistory();
+            // 初回起動時だけ真っ白な状態を保存
+            if (history.length === 0) saveHistory();
         }
         window.onload = init;
         window.onresize = init;
@@ -89,13 +90,17 @@
             document.getElementById('btn-move').classList.toggle('active', t === 'move');
         }
 
+        let lastX = 0, lastY = 0;
         let touchStartDist = 0;
         let initialScale = 1;
-        let lastX = 0, lastY = 0;
 
-        // 描画開始
+        function getPos(e) {
+            const t = e.touches ? e.touches[0] : e;
+            return { x: t.clientX, y: t.clientY };
+        }
+
         function startAction(e) {
-            e.preventDefault();
+            if (e.cancelable) e.preventDefault();
             const targetId = e.currentTarget.id === 'top-area' ? 'top' : 'bottom';
             const state = states[targetId];
             const pos = getPos(e);
@@ -109,16 +114,18 @@
                     lastX = pos.x; lastY = pos.y;
                 } else if (targetId === 'bottom') {
                     isDrawing = true;
-                    const canvasX = (pos.x - e.currentTarget.getBoundingClientRect().left - state.x) / state.scale;
-                    const canvasY = (pos.y - e.currentTarget.getBoundingClientRect().top - state.y) / state.scale;
+                    const rect = canvas.getBoundingClientRect();
+                    const canvasX = (pos.x - rect.left - states.bottom.x) / states.bottom.scale;
+                    const canvasY = (pos.y - rect.top - states.bottom.y) / states.bottom.scale;
                     ctx.beginPath();
                     ctx.moveTo(canvasX, canvasY);
+                    // 描き始めの点だけでも打っておく
+                    drawAction(e);
                 }
             }
         }
 
-        // 描画中
-        function moveAction(e) {
+        function drawAction(e) {
             const targetId = e.currentTarget.id === 'top-area' ? 'top' : 'bottom';
             const state = states[targetId];
             const container = targetId === 'top' ? imgContainer : canvasContainer;
@@ -133,10 +140,11 @@
                     state.y += pos.y - lastY;
                     lastX = pos.x; lastY = pos.y;
                 } else if (isDrawing && targetId === 'bottom') {
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    const canvasX = (pos.x - rect.left - state.x) / state.scale;
-                    const canvasY = (pos.y - rect.top - state.y) / state.scale;
-                    ctx.lineWidth = penSize.value;
+                    const rect = canvas.getBoundingClientRect();
+                    const canvasX = (pos.x - rect.left - states.bottom.x) / states.bottom.scale;
+                    const canvasY = (pos.y - rect.top - states.bottom.y) / states.bottom.scale;
+                    
+                    ctx.lineWidth = penSizeInput.value; // ここでリアルタイムに太さを反映！
                     ctx.strokeStyle = (tool === 'eraser') ? '#fff' : '#333';
                     ctx.lineTo(canvasX, canvasY);
                     ctx.stroke();
@@ -145,28 +153,65 @@
             container.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
         }
 
-        // 終了
-        function endAction(targetId) {
-            if (isDrawing) { isDrawing = false; saveHistory(); }
+        function stopAction() {
+            if (isDrawing) {
+                isDrawing = false;
+                saveHistory();
+            }
             states.top.isMoving = false;
             states.bottom.isMoving = false;
-        }
-
-        function getPos(e) {
-            const t = e.touches ? e.touches[0] : e;
-            return { x: t.clientX, y: t.clientY };
         }
 
         ['top-area', 'bottom-area'].forEach(id => {
             const el = document.getElementById(id);
             el.addEventListener('mousedown', startAction);
-            el.addEventListener('mousemove', moveAction);
+            el.addEventListener('mousemove', drawAction);
             el.addEventListener('touchstart', startAction, {passive: false});
-            el.addEventListener('touchmove', moveAction, {passive: false});
+            el.addEventListener('touchmove', drawAction, {passive: false});
         });
 
-        window.addEventListener('mouseup', () => endAction());
-        window.addEventListener('touchend', () => endAction());
+        window.addEventListener('mouseup', stopAction);
+        window.addEventListener('touchend', stopAction);
+
+        // 履歴管理（Undo/Redo）の決定版
+        function saveHistory() {
+            // もし「戻る」をした後に新しく描き始めたら、それ以降の履歴（Redo分）を消す
+            if (historyStep < history.length - 1) {
+                history = history.slice(0, historyStep + 1);
+            }
+            history.push(canvas.toDataURL());
+            historyStep++;
+        }
+
+        function undo() {
+            if (historyStep > 0) {
+                historyStep--;
+                loadFromHistory();
+            }
+        }
+
+        function redo() {
+            if (historyStep < history.length - 1) {
+                historyStep++;
+                loadFromHistory();
+            }
+        }
+
+        function loadFromHistory() {
+            const tempImg = new Image();
+            tempImg.src = history[historyStep];
+            tempImg.onload = () => {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(tempImg, 0, 0);
+            };
+        }
+
+        function clearCanvas() {
+            if(confirm('全部消してもよかですか？')) {
+                ctx.clearRect(0,0,canvas.width,canvas.height);
+                saveHistory();
+            }
+        }
 
         document.getElementById('file-upload').onchange = (e) => {
             const file = e.target.files[0];
@@ -174,15 +219,14 @@
                 const reader = new FileReader();
                 reader.onload = (ev) => {
                     img.src = ev.target.result;
-                    img.onload = () => { states.top = { scale: 1, x: 0, y: 0 }; imgContainer.style.transform = `translate(0,0) scale(1)`; };
+                    img.onload = () => { 
+                        states.top = { scale: 1, x: 0, y: 0, isMoving: false }; 
+                        imgContainer.style.transform = `translate(0,0) scale(1)`; 
+                    };
                 };
                 reader.readAsDataURL(file);
             }
         };
-
-        function saveHistory() { if (historyStep < history.length - 1) history = history.slice(0, historyStep + 1); history.push(canvas.toDataURL()); historyStep++; }
-        function undo() { if (historyStep > 0) { historyStep--; const i = new Image(); i.src = history[historyStep]; i.onload = () => { ctx.clearRect(0,0,canvas.width,canvas.height); ctx.drawImage(i,0,0); }; } }
-        function clearCanvas() { if(confirm('全部消してもよかですか？')) { ctx.clearRect(0,0,canvas.width,canvas.height); saveHistory(); } }
     </script>
 </body>
 </html>
