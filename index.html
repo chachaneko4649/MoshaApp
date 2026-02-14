@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>KAZUさんの模写アプリ_決定版V2</title>
+    <title>KAZUさんの模写アプリ_最終回答</title>
     <style>
         html, body { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; background: #222; font-family: sans-serif; }
         body { display: flex; flex-direction: column; }
@@ -13,27 +13,27 @@
         .img-layer { position: absolute; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; pointer-events: none; }
         #preview { max-width: 100%; max-height: 100%; object-fit: contain; }
         canvas { width: 100%; height: 100%; display: block; }
-        .controls-top { position: absolute; top: 10px; left: 10px; z-index: 1000; }
         .toolbar { 
             position: absolute; bottom: 25px; left: 10px; right: 10px; 
             z-index: 1000; display: flex; flex-wrap: wrap; gap: 8px; 
             background: rgba(0,0,0,0.85); padding: 12px; border-radius: 12px; 
             justify-content: center; align-items: center; color: white;
         }
+        .controls-top { position: absolute; top: 10px; left: 10px; z-index: 1000; }
         label, button { background: #555; color: white; padding: 8px 12px; border-radius: 6px; font-size: 13px; border: none; cursor: pointer; }
         .active { background: #007bff !important; }
-        input[type="range"] { width: 70px; margin: 0 5px; vertical-align: middle; }
+        input[type="range"] { width: 80px; }
     </style>
 </head>
 <body>
 
     <div id="top-area">
         <div class="controls-top">
-            <label for="file-upload">画像を選択</label>
+            <label for="file-upload">画像選択</label>
             <input type="file" id="file-upload" accept="image/*" style="display:none;">
         </div>
         <div id="img-container" style="width:100%; height:100%; transform-origin: 0 0;">
-            <div class="img-layer"><img id="preview" src="" alt=""></div>
+            <div class="img-layer"><img id="preview" src=""></div>
         </div>
     </div>
 
@@ -41,7 +41,7 @@
         <div class="toolbar">
             <button id="btn-pen" class="active" onclick="setTool('pen')">ペン</button>
             <button id="btn-eraser" onclick="setTool('eraser')">消しゴム</button>
-            <button id="btn-move" onclick="setTool('move')">移動/拡大</button>
+            <button id="btn-move" onclick="setTool('move')">移動</button>
             <span>太さ:</span>
             <input type="range" id="pen-size" min="1" max="50" value="5">
             <button onclick="undo()">戻る</button>
@@ -59,17 +59,13 @@
         const img = document.getElementById('preview');
         const imgContainer = document.getElementById('img-container');
         const canvasContainer = document.getElementById('canvas-container');
-        const penSizeInput = document.getElementById('pen-size');
+        const penSize = document.getElementById('pen-size');
 
         let tool = 'pen';
         let isDrawing = false;
         let history = [];
         let historyStep = -1;
-
-        let states = {
-            top: { scale: 1, x: 0, y: 0, isMoving: false },
-            bottom: { scale: 1, x: 0, y: 0, isMoving: false }
-        };
+        let states = { top: { scale: 1, x: 0, y: 0 }, bottom: { scale: 1, x: 0, y: 0 } };
 
         function init() {
             const rect = document.getElementById('bottom-area').getBoundingClientRect();
@@ -77,8 +73,7 @@
             canvas.height = rect.height;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
-            // 初回起動時だけ真っ白な状態を保存
-            if (history.length === 0) saveHistory();
+            if (historyStep === -1) saveHistory();
         }
         window.onload = init;
         window.onresize = init;
@@ -90,141 +85,94 @@
             document.getElementById('btn-move').classList.toggle('active', t === 'move');
         }
 
-        let lastX = 0, lastY = 0;
-        let touchStartDist = 0;
-        let initialScale = 1;
+        let lastX = 0, lastY = 0, touchDist = 0, startScale = 1;
 
-        function getPos(e) {
-            const t = e.touches ? e.touches[0] : e;
-            return { x: t.clientX, y: t.clientY };
-        }
-
-        function startAction(e) {
+        function handleInput(e) {
             if (e.cancelable) e.preventDefault();
-            const targetId = e.currentTarget.id === 'top-area' ? 'top' : 'bottom';
-            const state = states[targetId];
-            const pos = getPos(e);
+            const target = e.currentTarget.id === 'top-area' ? 'top' : 'bottom';
+            const state = states[target];
+            const container = target === 'top' ? imgContainer : canvasContainer;
+            const rect = e.currentTarget.getBoundingClientRect();
+            const t = e.touches ? e.touches[0] : e;
 
+            // ズーム（指2本）
             if (e.touches && e.touches.length === 2) {
-                touchStartDist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
-                initialScale = state.scale;
-            } else {
-                if (tool === 'move' || targetId === 'top') {
-                    state.isMoving = true;
-                    lastX = pos.x; lastY = pos.y;
-                } else if (targetId === 'bottom') {
-                    isDrawing = true;
-                    const rect = canvas.getBoundingClientRect();
-                    const canvasX = (pos.x - rect.left - states.bottom.x) / states.bottom.scale;
-                    const canvasY = (pos.y - rect.top - states.bottom.y) / states.bottom.scale;
-                    ctx.beginPath();
-                    ctx.moveTo(canvasX, canvasY);
-                    // 描き始めの点だけでも打っておく
-                    drawAction(e);
-                }
-            }
-        }
+                const d = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
+                if (e.type === 'touchstart') { touchDist = d; startScale = state.scale; }
+                else { state.scale = startScale * (d / touchDist); }
+            } 
+            // 1本指・マウス
+            else {
+                const x = (t.clientX - rect.left - state.x) / state.scale;
+                const y = (t.clientY - rect.top - state.y) / state.scale;
 
-        function drawAction(e) {
-            const targetId = e.currentTarget.id === 'top-area' ? 'top' : 'bottom';
-            const state = states[targetId];
-            const container = targetId === 'top' ? imgContainer : canvasContainer;
-            const pos = getPos(e);
-
-            if (e.touches && e.touches.length === 2) {
-                const dist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
-                state.scale = initialScale * (dist / touchStartDist);
-            } else {
-                if (state.isMoving) {
-                    state.x += pos.x - lastX;
-                    state.y += pos.y - lastY;
-                    lastX = pos.x; lastY = pos.y;
-                } else if (isDrawing && targetId === 'bottom') {
-                    const rect = canvas.getBoundingClientRect();
-                    const canvasX = (pos.x - rect.left - states.bottom.x) / states.bottom.scale;
-                    const canvasY = (pos.y - rect.top - states.bottom.y) / states.bottom.scale;
-                    
-                    ctx.lineWidth = penSizeInput.value; // ここでリアルタイムに太さを反映！
-                    ctx.strokeStyle = (tool === 'eraser') ? '#fff' : '#333';
-                    ctx.lineTo(canvasX, canvasY);
-                    ctx.stroke();
+                if (e.type === 'touchstart' || e.type === 'mousedown') {
+                    if (tool === 'move' || target === 'top') {
+                        state.moving = true; lastX = t.clientX; lastY = t.clientY;
+                    } else if (target === 'bottom') {
+                        isDrawing = true;
+                        ctx.beginPath();
+                        ctx.moveTo(x, y);
+                    }
+                } else if (e.type === 'touchmove' || e.type === 'mousemove') {
+                    if (state.moving) {
+                        state.x += t.clientX - lastX; state.y += t.clientY - lastY;
+                        lastX = t.clientX; lastY = t.clientY;
+                    } else if (isDrawing) {
+                        // ★描画の直前に必ず太さと色ば再設定する★
+                        ctx.lineWidth = penSize.value;
+                        ctx.strokeStyle = (tool === 'eraser') ? '#fff' : '#333';
+                        ctx.lineTo(x, y);
+                        ctx.stroke();
+                    }
                 }
             }
             container.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
         }
 
-        function stopAction() {
-            if (isDrawing) {
-                isDrawing = false;
-                saveHistory();
-            }
-            states.top.isMoving = false;
-            states.bottom.isMoving = false;
+        function stop() {
+            if (isDrawing) { isDrawing = false; saveHistory(); }
+            states.top.moving = false; states.bottom.moving = false;
         }
 
         ['top-area', 'bottom-area'].forEach(id => {
             const el = document.getElementById(id);
-            el.addEventListener('mousedown', startAction);
-            el.addEventListener('mousemove', drawAction);
-            el.addEventListener('touchstart', startAction, {passive: false});
-            el.addEventListener('touchmove', drawAction, {passive: false});
+            el.addEventListener('mousedown', handleInput);
+            el.addEventListener('mousemove', handleInput);
+            el.addEventListener('touchstart', handleInput, {passive: false});
+            el.addEventListener('touchmove', handleInput, {passive: false});
         });
+        window.addEventListener('mouseup', stop);
+        window.addEventListener('touchend', stop);
 
-        window.addEventListener('mouseup', stopAction);
-        window.addEventListener('touchend', stopAction);
-
-        // 履歴管理（Undo/Redo）の決定版
         function saveHistory() {
-            // もし「戻る」をした後に新しく描き始めたら、それ以降の履歴（Redo分）を消す
-            if (historyStep < history.length - 1) {
-                history = history.slice(0, historyStep + 1);
-            }
+            if (historyStep < history.length - 1) history = history.slice(0, historyStep + 1);
             history.push(canvas.toDataURL());
             historyStep++;
         }
 
         function undo() {
-            if (historyStep > 0) {
-                historyStep--;
-                loadFromHistory();
-            }
+            if (historyStep > 0) { historyStep--; load(); }
         }
 
         function redo() {
-            if (historyStep < history.length - 1) {
-                historyStep++;
-                loadFromHistory();
-            }
+            if (historyStep < history.length - 1) { historyStep++; load(); }
         }
 
-        function loadFromHistory() {
-            const tempImg = new Image();
-            tempImg.src = history[historyStep];
-            tempImg.onload = () => {
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                ctx.drawImage(tempImg, 0, 0);
-            };
+        function load() {
+            const i = new Image();
+            i.src = history[historyStep];
+            i.onload = () => { ctx.clearRect(0,0,canvas.width,canvas.height); ctx.drawImage(i,0,0); };
         }
 
-        function clearCanvas() {
-            if(confirm('全部消してもよかですか？')) {
-                ctx.clearRect(0,0,canvas.width,canvas.height);
-                saveHistory();
-            }
-        }
-
+        function clearCanvas() { if(confirm('消すよ？')) { ctx.clearRect(0,0,canvas.width,canvas.height); saveHistory(); } }
+        
         document.getElementById('file-upload').onchange = (e) => {
-            const file = e.target.files[0];
-            if (file) {
-                const reader = new FileReader();
-                reader.onload = (ev) => {
-                    img.src = ev.target.result;
-                    img.onload = () => { 
-                        states.top = { scale: 1, x: 0, y: 0, isMoving: false }; 
-                        imgContainer.style.transform = `translate(0,0) scale(1)`; 
-                    };
-                };
-                reader.readAsDataURL(file);
+            const f = e.target.files[0];
+            if (f) {
+                const r = new FileReader();
+                r.onload = (ev) => { img.src = ev.target.result; states.top={scale:1,x:0,y:0}; imgContainer.style.transform=`translate(0,0) scale(1)`; };
+                r.readAsDataURL(f);
             }
         };
     </script>
