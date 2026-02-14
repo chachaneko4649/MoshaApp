@@ -2,54 +2,49 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>KAZUさん模写アプリ_超安定版</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>KAZUさんの模写アプリ_究極シンプル版</title>
     <style>
-        html, body { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; background: #222; font-family: sans-serif; }
-        body { display: flex; flex-direction: column; }
-        #top-area, #bottom-area { flex: 1; position: relative; overflow: hidden; width: 100%; }
-        #top-area { background: #444; border-bottom: 2px solid #000; }
+        body { margin: 0; padding: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; background: #333; font-family: sans-serif; }
+        /* 上下半分ずつ固定 */
+        #top-area, #bottom-area { height: 50vh; width: 100%; position: relative; overflow: hidden; }
+        #top-area { background: #eee; display: flex; align-items: center; justify-content: center; }
         #bottom-area { background: #fff; touch-action: none; }
-        .img-layer { position: absolute; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+        
         #preview { max-width: 100%; max-height: 100%; object-fit: contain; }
-        canvas { width: 100%; height: 100%; display: block; }
+        canvas { width: 100%; height: 100%; display: block; cursor: crosshair; }
+
+        .controls-top { position: absolute; top: 10px; left: 10px; z-index: 10; }
         .toolbar { 
-            position: absolute; bottom: 30px; left: 5px; right: 5px; 
-            z-index: 2000; display: flex; flex-wrap: wrap; gap: 5px; 
-            background: rgba(0,0,0,0.85); padding: 10px; border-radius: 12px; 
-            justify-content: center; align-items: center; color: white;
+            position: absolute; bottom: 20px; left: 0; right: 0; 
+            display: flex; flex-wrap: wrap; gap: 5px; justify-content: center; 
+            background: rgba(0,0,0,0.7); padding: 10px; color: white;
         }
-        .controls-top { position: absolute; top: 10px; left: 10px; z-index: 1000; }
-        label, button { background: #555; color: white; padding: 8px 10px; border-radius: 6px; font-size: 12px; border: none; cursor: pointer; }
+        button, label { background: #555; color: white; border: none; padding: 8px 12px; border-radius: 4px; font-size: 13px; cursor: pointer; }
         .active { background: #007bff !important; }
-        input[type="range"] { width: 60px; }
+        input[type="range"] { width: 80px; vertical-align: middle; }
     </style>
 </head>
 <body>
 
     <div id="top-area">
         <div class="controls-top">
-            <label for="file-upload">画像選択</label>
+            <label for="file-upload">画像を選択</label>
             <input type="file" id="file-upload" accept="image/*" style="display:none;">
         </div>
-        <div id="img-container" style="width:100%; height:100%; transform-origin: 0 0;">
-            <div class="img-layer"><img id="preview" src=""></div>
-        </div>
+        <img id="preview" src="" alt="お手本画像">
     </div>
 
     <div id="bottom-area">
+        <canvas id="canvas"></canvas>
         <div class="toolbar">
-            <button id="btn-pen" class="active" onclick="setTool('pen')">ペン</button>
-            <button id="btn-eraser" onclick="setTool('eraser')">消しゴム</button>
-            <button id="btn-move" onclick="setTool('move')">移動</button>
+            <button id="btn-pen" class="active" onclick="changeMode('pen')">ペン</button>
+            <button id="btn-eraser" onclick="changeMode('eraser')">消しゴム</button>
             <span>太さ:</span>
             <input type="range" id="pen-size" min="1" max="50" value="5">
             <button onclick="undo()">戻る</button>
             <button onclick="redo()">進む</button>
             <button onclick="clearCanvas()" style="background:#d9534f;">消去</button>
-        </div>
-        <div id="canvas-container" style="width:100%; height:100%; transform-origin: 0 0;">
-            <canvas id="canvas"></canvas>
         </div>
     </div>
 
@@ -57,119 +52,113 @@
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         const img = document.getElementById('preview');
-        const imgContainer = document.getElementById('img-container');
-        const canvasContainer = document.getElementById('canvas-container');
-        const penSize = document.getElementById('pen-size');
+        const penSizeInput = document.getElementById('pen-size');
+        
+        let isDrawing = false;
+        let mode = 'pen';
+        let history = [];
+        let step = -1;
 
-        let tool = 'pen', isDrawing = false, history = [], historyStep = -1;
-        let states = { top: { scale: 1, x: 0, y: 0 }, bottom: { scale: 1, x: 0, y: 0 } };
-
+        // 初期設定：画面サイズに合わせてキャンバスを作る
         function init() {
             canvas.width = canvas.offsetWidth;
             canvas.height = canvas.offsetHeight;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
-            if (history.length === 0) saveHistory();
+            if(history.length === 0) save();
         }
         window.onload = init;
         window.onresize = init;
 
-        function setTool(t) {
-            tool = t;
-            document.getElementById('btn-pen').classList.toggle('active', t === 'pen');
-            document.getElementById('btn-eraser').classList.toggle('active', t === 'eraser');
-            document.getElementById('btn-move').classList.toggle('active', t === 'move');
+        function changeMode(m) {
+            mode = m;
+            document.getElementById('btn-pen').classList.toggle('active', m === 'pen');
+            document.getElementById('btn-eraser').classList.toggle('active', m === 'eraser');
         }
 
-        let lastX = 0, lastY = 0, touchDist = 0, startScale = 1;
-
-        function getEvPos(e) {
+        function getPos(e) {
+            const rect = canvas.getBoundingClientRect();
             const t = e.touches ? e.touches[0] : e;
-            return { x: t.clientX, y: t.clientY };
+            return { x: t.clientX - rect.left, y: t.clientY - rect.top };
         }
 
-        function onStart(e) {
-            if (e.cancelable) e.preventDefault();
-            const target = e.currentTarget.id === 'top-area' ? 'top' : 'bottom';
-            const state = states[target];
-            const p = getEvPos(e);
+        function start(e) {
+            if(e.cancelable) e.preventDefault();
+            isDrawing = true;
+            const pos = getPos(e);
+            ctx.beginPath();
+            ctx.moveTo(pos.x, pos.y);
+        }
 
-            if (e.touches && e.touches.length === 2) {
-                touchDist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
-                startScale = state.scale;
-            } else {
-                if (tool === 'move' || target === 'top') {
-                    state.moving = true; lastX = p.x; lastY = p.y;
-                } else if (target === 'bottom') {
-                    isDrawing = true;
-                    const rect = canvas.getBoundingClientRect();
-                    const cx = (p.x - rect.left - state.x) / state.scale;
-                    const cy = (p.y - rect.top - state.y) / state.scale;
-                    ctx.beginPath();
-                    ctx.moveTo(cx, cy);
-                }
+        function draw(e) {
+            if(!isDrawing) return;
+            const pos = getPos(e);
+            ctx.lineWidth = penSizeInput.value; // スライダーの値を即時反映！
+            ctx.strokeStyle = (mode === 'pen') ? '#333' : '#fff';
+            ctx.lineTo(pos.x, pos.y);
+            ctx.stroke();
+        }
+
+        function stop() {
+            if(isDrawing) {
+                isDrawing = false;
+                save();
             }
         }
 
-        function onMove(e) {
-            const target = e.currentTarget.id === 'top-area' ? 'top' : 'bottom';
-            const state = states[target];
-            const p = getEvPos(e);
+        // イベント登録（これでもかというほど確実に！）
+        canvas.addEventListener('mousedown', start);
+        canvas.addEventListener('mousemove', draw);
+        window.addEventListener('mouseup', stop);
 
-            if (e.touches && e.touches.length === 2) {
-                const d = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
-                state.scale = startScale * (d / touchDist);
-            } else {
-                if (state.moving) {
-                    state.x += p.x - lastX; state.y += p.y - lastY;
-                    lastX = p.x; lastY = p.y;
-                } else if (isDrawing && target === 'bottom') {
-                    const rect = canvas.getBoundingClientRect();
-                    const cx = (p.x - rect.left - state.x) / state.scale;
-                    const cy = (p.y - rect.top - state.y) / state.scale;
-                    ctx.lineWidth = parseInt(penSize.value); // ここで確実に数値化
-                    ctx.strokeStyle = (tool === 'eraser') ? '#fff' : '#333';
-                    ctx.lineTo(cx, cy);
-                    ctx.stroke();
-                }
-            }
-            const container = target === 'top' ? imgContainer : canvasContainer;
-            container.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
-        }
+        canvas.addEventListener('touchstart', start, {passive: false});
+        canvas.addEventListener('touchmove', draw, {passive: false});
+        window.addEventListener('touchend', stop);
 
-        function onEnd() {
-            if (isDrawing) { isDrawing = false; saveHistory(); }
-            states.top.moving = false; states.bottom.moving = false;
-        }
-
-        [document.getElementById('top-area'), document.getElementById('bottom-area')].forEach(el => {
-            el.addEventListener('mousedown', onStart);
-            el.addEventListener('mousemove', onMove);
-            el.addEventListener('touchstart', onStart, {passive: false});
-            el.addEventListener('touchmove', onMove, {passive: false});
-        });
-        window.addEventListener('mouseup', onEnd);
-        window.addEventListener('touchend', onEnd);
-
-        function saveHistory() {
-            if (historyStep < history.length - 1) history = history.slice(0, historyStep + 1);
+        // 履歴管理
+        function save() {
+            step++;
+            if (step < history.length) history.length = step;
             history.push(canvas.toDataURL());
-            historyStep++;
         }
-        function undo() { if (historyStep > 0) { historyStep--; drawH(); } }
-        function redo() { if (historyStep < history.length - 1) { historyStep++; drawH(); } }
-        function drawH() {
-            const i = new Image(); i.src = history[historyStep];
-            i.onload = () => { ctx.clearRect(0,0,canvas.width,canvas.height); ctx.drawImage(i,0,0); };
+
+        function undo() {
+            if (step > 0) {
+                step--;
+                load();
+            }
         }
-        function clearCanvas() { if(confirm('消すよ？')) { ctx.clearRect(0,0,canvas.width,canvas.height); saveHistory(); } }
-        
+
+        function redo() {
+            if (step < history.length - 1) {
+                step++;
+                load();
+            }
+        }
+
+        function load() {
+            const temp = new Image();
+            temp.src = history[step];
+            temp.onload = () => {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(temp, 0, 0);
+            };
+        }
+
+        function clearCanvas() {
+            if(confirm('全部消すよ？')) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                save();
+            }
+        }
+
+        // 画像選択
         document.getElementById('file-upload').onchange = (e) => {
-            const f = e.target.files[0];
-            if (f) {
-                const r = new FileReader();
-                r.onload = (ev) => { img.src = ev.target.result; states.top={scale:1,x:0,y:0}; imgContainer.style.transform=`translate(0,0) scale(1)`; };
-                r.readAsDataURL(f);
+            const file = e.target.files[0];
+            if(file) {
+                const reader = new FileReader();
+                reader.onload = (ev) => { img.src = ev.target.result; };
+                reader.readAsDataURL(file);
             }
         };
     </script>
