@@ -3,82 +3,63 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>せーさん式・模写アプリ完全版</title>
+    <title>KAZUさんの模写アプリ_決定版</title>
     <style>
-        /* CSS: Androidのバー対策とレイアウト */
-        body { 
-            margin: 0; 
-            padding: 0; 
-            height: 100dvh; /* 動的な高さ設定 */
-            display: flex; 
-            flex-direction: column; 
-            overflow: hidden; 
-            font-family: sans-serif; 
-            background: #333; 
-            touch-action: none; 
+        /* 100dvhが使えないPCブラウザ向けに、flexを使って画面いっぱいに広げる設定ばい */
+        html, body {
+            margin: 0; padding: 0;
+            height: 100%; width: 100%;
+            overflow: hidden;
+            background-color: #222; /* 背景を暗くして集中しやすく */
+            font-family: sans-serif;
         }
 
-        /* 上下エリア：50%ずつ */
-        #top-area, #bottom-area { 
-            height: 50dvh; 
-            position: relative; 
-            overflow: hidden; 
-            background: #eee; 
+        body {
+            display: flex;
+            flex-direction: column;
         }
-        #bottom-area { 
-            background: #fff; 
-            border-top: 2px solid #555; 
+
+        /* 上下エリアを50%ずつに固定（flex: 1） */
+        #top-area, #bottom-area {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+            width: 100%;
         }
-        
-        /* 拡大・移動用の箱 */
-        .zoom-container { 
-            width: 100%; 
-            height: 100%; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            transform-origin: 0 0; 
+
+        #top-area { background: #eee; border-bottom: 2px solid #444; }
+        #bottom-area { background: #fff; touch-action: none; }
+
+        /* 画像とキャンバスを動かすためのコンテナ */
+        .zoom-container {
+            width: 100%; height: 100%;
+            display: flex; align-items: center; justify-content: center;
+            transform-origin: 0 0;
+            cursor: crosshair;
         }
-        #preview { 
-            max-width: 100%; 
-            max-height: 100%; 
-            pointer-events: none; 
+
+        #preview {
+            max-width: 100%; max-height: 100%;
+            pointer-events: none;
             object-fit: contain;
         }
 
-        /* コントロール：Androidバーに被らないよう位置を調整 */
-        .controls-top { 
-            position: absolute; 
-            top: 10px; 
-            left: 10px; 
-            z-index: 100; 
+        /* メニュー周り：Androidのバー対策で少し浮かせる */
+        .controls-top {
+            position: absolute; top: 10px; left: 10px; z-index: 100;
         }
-        .toolbar { 
-            position: absolute; 
-            /* Androidのメニューバー対策で、下から少し浮かせる */
-            bottom: 30px; 
-            left: 10px; 
-            right: 10px; 
-            z-index: 100; 
-            display: flex; 
-            flex-wrap: wrap; 
-            gap: 6px; 
-            background: rgba(0,0,0,0.8); 
-            padding: 12px; 
-            border-radius: 12px; 
-            justify-content: center;
+        .toolbar {
+            position: absolute; bottom: 30px; left: 10px; right: 10px;
+            z-index: 100; display: flex; flex-wrap: wrap; gap: 8px;
+            background: rgba(0,0,0,0.8); padding: 12px; border-radius: 12px;
+            justify-content: center; align-items: center;
         }
 
-        label, button { 
-            background: #555; 
-            color: white; 
-            padding: 8px 12px; 
-            border-radius: 6px; 
-            font-size: 13px; 
-            border: none; 
-            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        label, button {
+            background: #555; color: white; padding: 8px 14px;
+            border-radius: 6px; font-size: 14px; border: none; cursor: pointer;
         }
-        .active { background: #007bff !important; font-weight: bold; }
+        .active { background: #007bff !important; }
         #btn-eraser.active { background: #dc3545 !important; }
     </style>
 </head>
@@ -87,4 +68,95 @@
     <div id="top-area">
         <div class="controls-top">
             <label for="file-upload">画像を選択</label>
-            <input type="file" id="file-upload
+            <input type="file" id="file-upload" accept="image/*" style="display:none;">
+        </div>
+        <div id="img-container" class="zoom-container">
+            <img id="preview" src="" alt="ここにお手本が表示されるばい">
+        </div>
+    </div>
+
+    <div id="bottom-area">
+        <div class="toolbar">
+            <button id="btn-pen" class="active" onclick="setTool('pen')">ペン</button>
+            <button id="btn-eraser" onclick="setTool('eraser')">消しゴム</button>
+            <button id="btn-move" onclick="setTool('move')">移動/拡大</button>
+            <button onclick="undo()">戻る</button>
+            <button onclick="clearCanvas()" style="background:#777;">消去</button>
+        </div>
+        <div id="canvas-container" class="zoom-container">
+            <canvas id="canvas"></canvas>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const img = document.getElementById('preview');
+        const imgContainer = document.getElementById('img-container');
+        const canvasContainer = document.getElementById('canvas-container');
+
+        let tool = 'pen';
+        let drawing = false;
+        let history = [];
+        let historyStep = -1;
+
+        let states = {
+            top: { scale: 1, x: 0, y: 0, lastX: 0, lastY: 0 },
+            bottom: { scale: 1, x: 0, y: 0, lastX: 0, lastY: 0 }
+        };
+
+        // 画面サイズに合わせてキャンバスをリサイズする関数
+        function resize() {
+            const rect = document.getElementById('bottom-area').getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+            // リサイズすると中身が消えるので、履歴から復元（あれば）
+            if (historyStep >= 0) loadHistory();
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.lineWidth = 3;
+        }
+
+        window.addEventListener('resize', resize);
+        window.addEventListener('DOMContentLoaded', () => {
+            resize();
+            saveHistory();
+        });
+
+        function setTool(t) {
+            tool = t;
+            document.getElementById('btn-pen').className = (t === 'pen' ? 'active' : '');
+            document.getElementById('btn-eraser').className = (t === 'eraser' ? 'active' : '');
+            document.getElementById('btn-move').className = (t === 'move' ? 'active' : '');
+        }
+
+        let touchStartDist = 0;
+        let initialScale = 1;
+
+        // タッチとマウスの両方に対応したイベント処理
+        function handleInput(e) {
+            const isTouch = e.type.includes('touch');
+            const targetId = e.currentTarget.id === 'top-area' ? 'top' : 'bottom';
+            const state = states[targetId];
+            const container = targetId === 'top' ? imgContainer : canvasContainer;
+
+            if (isTouch && e.touches.length === 2) {
+                // ピンチズーム
+                const dist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
+                if (e.type === 'touchstart') {
+                    touchStartDist = dist;
+                    initialScale = state.scale;
+                } else {
+                    state.scale = initialScale * (dist / touchStartDist);
+                }
+            } else {
+                // 1本指またはマウス
+                const clientX = isTouch ? e.touches[0].clientX : e.clientX;
+                const clientY = isTouch ? e.touches[0].clientY : e.clientY;
+                const rect = e.currentTarget.getBoundingClientRect();
+                
+                const canvasX = (clientX - rect.left - state.x) / state.scale;
+                const canvasY = (clientY - rect.top - state.y) / state.scale;
+
+                if (tool === 'move' || targetId === 'top') {
+                    if (e.type
