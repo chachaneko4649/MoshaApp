@@ -3,22 +3,33 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>KAZUさんの模写アプリ_究極シンプル版</title>
+    <title>KAZUさんの模写アプリ_レスポンシブ版</title>
     <style>
-        body { margin: 0; padding: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; background: #333; font-family: sans-serif; }
-        /* 上下半分ずつ固定 */
-        #top-area, #bottom-area { height: 50vh; width: 100%; position: relative; overflow: hidden; }
-        #top-area { background: #eee; display: flex; align-items: center; justify-content: center; }
+        body { margin: 0; padding: 0; height: 100vh; display: flex; overflow: hidden; background: #333; font-family: sans-serif; }
+        
+        /* --- ここが魔法の切り替えポイントばい！ --- */
+        /* 基本（スマホなど）は縦並び */
+        flex-direction: column;
+        
+        /* 画面の横幅が 768px 以上のとき（PCなど）は横並びにする */
+        @media (min-width: 768px) {
+            body { flex-direction: row; }
+            #top-area, #bottom-area { height: 100vh !important; width: 50vw !important; }
+            #top-area { border-bottom: none !important; border-right: 2px solid #000; }
+        }
+
+        #top-area, #bottom-area { flex: 1; position: relative; overflow: hidden; }
+        #top-area { background: #eee; display: flex; align-items: center; justify-content: center; border-bottom: 2px solid #000; }
         #bottom-area { background: #fff; touch-action: none; }
         
-        #preview { max-width: 100%; max-height: 100%; object-fit: contain; }
+        #preview { max-width: 95%; max-height: 95%; object-fit: contain; }
         canvas { width: 100%; height: 100%; display: block; cursor: crosshair; }
 
         .controls-top { position: absolute; top: 10px; left: 10px; z-index: 10; }
         .toolbar { 
             position: absolute; bottom: 20px; left: 0; right: 0; 
             display: flex; flex-wrap: wrap; gap: 5px; justify-content: center; 
-            background: rgba(0,0,0,0.7); padding: 10px; color: white;
+            background: rgba(0,0,0,0.75); padding: 10px; color: white;
         }
         button, label { background: #555; color: white; border: none; padding: 8px 12px; border-radius: 4px; font-size: 13px; cursor: pointer; }
         .active { background: #007bff !important; }
@@ -59,15 +70,19 @@
         let history = [];
         let step = -1;
 
-        // 初期設定：画面サイズに合わせてキャンバスを作る
         function init() {
+            // キャンバスのサイズを現在の親要素に合わせる
             canvas.width = canvas.offsetWidth;
             canvas.height = canvas.offsetHeight;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
-            if(history.length === 0) save();
+            // 履歴があれば復元（リサイズ対策）
+            if (step >= 0) load();
+            else if (history.length === 0) save();
         }
+
         window.onload = init;
+        // PCでウィンドウサイズを変えたときも追従するようにするばい
         window.onresize = init;
 
         function changeMode(m) {
@@ -93,7 +108,7 @@
         function draw(e) {
             if(!isDrawing) return;
             const pos = getPos(e);
-            ctx.lineWidth = penSizeInput.value; // スライダーの値を即時反映！
+            ctx.lineWidth = penSizeInput.value;
             ctx.strokeStyle = (mode === 'pen') ? '#333' : '#fff';
             ctx.lineTo(pos.x, pos.y);
             ctx.stroke();
@@ -106,7 +121,6 @@
             }
         }
 
-        // イベント登録（これでもかというほど確実に！）
         canvas.addEventListener('mousedown', start);
         canvas.addEventListener('mousemove', draw);
         window.addEventListener('mouseup', stop);
@@ -115,26 +129,14 @@
         canvas.addEventListener('touchmove', draw, {passive: false});
         window.addEventListener('touchend', stop);
 
-        // 履歴管理
         function save() {
             step++;
             if (step < history.length) history.length = step;
             history.push(canvas.toDataURL());
         }
 
-        function undo() {
-            if (step > 0) {
-                step--;
-                load();
-            }
-        }
-
-        function redo() {
-            if (step < history.length - 1) {
-                step++;
-                load();
-            }
-        }
+        function undo() { if (step > 0) { step--; load(); } }
+        function redo() { if (step < history.length - 1) { step++; load(); } }
 
         function load() {
             const temp = new Image();
@@ -152,7 +154,6 @@
             }
         }
 
-        // 画像選択
         document.getElementById('file-upload').onchange = (e) => {
             const file = e.target.files[0];
             if(file) {
