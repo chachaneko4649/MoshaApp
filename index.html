@@ -3,28 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>KAZUさんの模写アプリ_最終版</title>
+    <title>KAZUさんの模写アプリ_修正版</title>
     <style>
         html, body { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; background: #222; font-family: sans-serif; }
         body { display: flex; flex-direction: column; }
-
-        /* 上下エリアの確保 */
         #top-area, #bottom-area { flex: 1; position: relative; overflow: hidden; width: 100%; }
         #top-area { background: #444; border-bottom: 2px solid #000; }
         #bottom-area { background: #fff; touch-action: none; }
-
-        /* 画像表示の修正：確実に真ん中に、かつ拡大可能に */
-        .img-layer { 
-            position: absolute; width: 100%; height: 100%;
-            display: flex; align-items: center; justify-content: center;
-            pointer-events: none; /* 下のコンテナにイベントを渡す */
-        }
+        .img-layer { position: absolute; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; pointer-events: none; }
         #preview { max-width: 100%; max-height: 100%; object-fit: contain; }
-
-        /* 描画レイヤー */
         canvas { width: 100%; height: 100%; display: block; }
-
-        /* 操作系 */
         .controls-top { position: absolute; top: 10px; left: 10px; z-index: 1000; }
         .toolbar { 
             position: absolute; bottom: 25px; left: 10px; right: 10px; 
@@ -32,11 +20,9 @@
             background: rgba(0,0,0,0.85); padding: 12px; border-radius: 12px; 
             justify-content: center; align-items: center; color: white;
         }
-
         label, button { background: #555; color: white; padding: 8px 12px; border-radius: 6px; font-size: 13px; border: none; cursor: pointer; }
         .active { background: #007bff !important; }
         input[type="range"] { width: 70px; margin: 0 5px; vertical-align: middle; }
-        span { font-size: 12px; }
     </style>
 </head>
 <body>
@@ -47,9 +33,7 @@
             <input type="file" id="file-upload" accept="image/*" style="display:none;">
         </div>
         <div id="img-container" style="width:100%; height:100%; transform-origin: 0 0;">
-            <div class="img-layer">
-                <img id="preview" src="" alt="">
-            </div>
+            <div class="img-layer"><img id="preview" src="" alt=""></div>
         </div>
     </div>
 
@@ -78,6 +62,7 @@
 
         let tool = 'pen';
         let isDrawing = false;
+        let isMoving = false;
         let history = [];
         let historyStep = -1;
 
@@ -86,7 +71,6 @@
             bottom: { scale: 1, x: 0, y: 0 }
         };
 
-        // 初期化：キャンバスサイズを確定させる
         function init() {
             const rect = document.getElementById('bottom-area').getBoundingClientRect();
             canvas.width = rect.width;
@@ -105,117 +89,100 @@
             document.getElementById('btn-move').classList.toggle('active', t === 'move');
         }
 
-        // 入力処理（PC・スマホ両対応）
         let touchStartDist = 0;
         let initialScale = 1;
         let lastX = 0, lastY = 0;
 
-        function handleInput(e) {
+        // 描画開始
+        function startAction(e) {
             e.preventDefault();
-            const rect = e.currentTarget.getBoundingClientRect();
+            const targetId = e.currentTarget.id === 'top-area' ? 'top' : 'bottom';
+            const state = states[targetId];
+            const pos = getPos(e);
+
+            if (e.touches && e.touches.length === 2) {
+                touchStartDist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
+                initialScale = state.scale;
+            } else {
+                if (tool === 'move' || targetId === 'top') {
+                    state.isMoving = true;
+                    lastX = pos.x; lastY = pos.y;
+                } else if (targetId === 'bottom') {
+                    isDrawing = true;
+                    const canvasX = (pos.x - e.currentTarget.getBoundingClientRect().left - state.x) / state.scale;
+                    const canvasY = (pos.y - e.currentTarget.getBoundingClientRect().top - state.y) / state.scale;
+                    ctx.beginPath();
+                    ctx.moveTo(canvasX, canvasY);
+                }
+            }
+        }
+
+        // 描画中
+        function moveAction(e) {
             const targetId = e.currentTarget.id === 'top-area' ? 'top' : 'bottom';
             const state = states[targetId];
             const container = targetId === 'top' ? imgContainer : canvasContainer;
-
-            const getClientPos = (evt) => {
-                if (evt.touches && evt.touches.length > 0) {
-                    return { x: evt.touches[0].clientX, y: evt.touches[0].clientY };
-                }
-                return { x: evt.clientX, y: evt.clientY };
-            };
-
-            const pos = getClientPos(e);
-            const canvasX = (pos.x - rect.left - state.x) / state.scale;
-            const canvasY = (pos.y - rect.top - state.y) / state.scale;
+            const pos = getPos(e);
 
             if (e.touches && e.touches.length === 2) {
-                // ピンチズーム
                 const dist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
-                if (e.type === 'touchstart') {
-                    touchStartDist = dist;
-                    initialScale = state.scale;
-                } else if (e.type === 'touchmove') {
-                    state.scale = initialScale * (dist / touchStartDist);
-                }
+                state.scale = initialScale * (dist / touchStartDist);
             } else {
-                // 描画 or 移動
-                if (e.type === 'touchstart' || e.type === 'mousedown') {
-                    if (tool === 'move' || targetId === 'top') {
-                        state.isMoving = true;
-                        lastX = pos.x; lastY = pos.y;
-                    } else if (targetId === 'bottom') {
-                        isDrawing = true;
-                        ctx.beginPath();
-                        ctx.moveTo(canvasX, canvasY);
-                    }
-                } else if (e.type === 'touchmove' || e.type === 'mousemove') {
-                    if (state.isMoving) {
-                        state.x += pos.x - lastX;
-                        state.y += pos.y - lastY;
-                        lastX = pos.x; lastY = pos.y;
-                    } else if (isDrawing) {
-                        ctx.lineWidth = penSize.value;
-                        ctx.strokeStyle = (tool === 'eraser') ? '#fff' : '#333';
-                        ctx.lineTo(canvasX, canvasY);
-                        ctx.stroke();
-                    }
-                } else {
-                    if (isDrawing) { isDrawing = false; saveHistory(); }
-                    state.isMoving = false;
+                if (state.isMoving) {
+                    state.x += pos.x - lastX;
+                    state.y += pos.y - lastY;
+                    lastX = pos.x; lastY = pos.y;
+                } else if (isDrawing && targetId === 'bottom') {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const canvasX = (pos.x - rect.left - state.x) / state.scale;
+                    const canvasY = (pos.y - rect.top - state.y) / state.scale;
+                    ctx.lineWidth = penSize.value;
+                    ctx.strokeStyle = (tool === 'eraser') ? '#fff' : '#333';
+                    ctx.lineTo(canvasX, canvasY);
+                    ctx.stroke();
                 }
             }
             container.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
         }
 
-        // イベント設定
+        // 終了
+        function endAction(targetId) {
+            if (isDrawing) { isDrawing = false; saveHistory(); }
+            states.top.isMoving = false;
+            states.bottom.isMoving = false;
+        }
+
+        function getPos(e) {
+            const t = e.touches ? e.touches[0] : e;
+            return { x: t.clientX, y: t.clientY };
+        }
+
         ['top-area', 'bottom-area'].forEach(id => {
             const el = document.getElementById(id);
-            el.addEventListener('mousedown', handleInput);
-            el.addEventListener('mousemove', handleInput);
-            window.addEventListener('mouseup', handleInput);
-            el.addEventListener('touchstart', handleInput, {passive: false});
-            el.addEventListener('touchmove', handleInput, {passive: false});
-            el.addEventListener('touchend', handleInput, {passive: false});
+            el.addEventListener('mousedown', startAction);
+            el.addEventListener('mousemove', moveAction);
+            el.addEventListener('touchstart', startAction, {passive: false});
+            el.addEventListener('touchmove', moveAction, {passive: false});
         });
 
-        // 画像読み込みの修正
+        window.addEventListener('mouseup', () => endAction());
+        window.addEventListener('touchend', () => endAction());
+
         document.getElementById('file-upload').onchange = (e) => {
             const file = e.target.files[0];
             if (file) {
                 const reader = new FileReader();
                 reader.onload = (ev) => {
                     img.src = ev.target.result;
-                    img.onload = () => {
-                        // 読み込み時にリセット
-                        states.top = { scale: 1, x: 0, y: 0 };
-                        imgContainer.style.transform = `translate(0px, 0px) scale(1)`;
-                    };
+                    img.onload = () => { states.top = { scale: 1, x: 0, y: 0 }; imgContainer.style.transform = `translate(0,0) scale(1)`; };
                 };
                 reader.readAsDataURL(file);
             }
         };
 
-        function saveHistory() {
-            if (historyStep < history.length - 1) history = history.slice(0, historyStep + 1);
-            history.push(canvas.toDataURL());
-            historyStep++;
-        }
-
-        function undo() {
-            if (historyStep > 0) {
-                historyStep--;
-                const i = new Image();
-                i.src = history[historyStep];
-                i.onload = () => { ctx.clearRect(0,0,canvas.width,canvas.height); ctx.drawImage(i,0,0); };
-            }
-        }
-
-        function clearCanvas() {
-            if(confirm('全部消してもよかですか？')) {
-                ctx.clearRect(0,0,canvas.width,canvas.height);
-                saveHistory();
-            }
-        }
+        function saveHistory() { if (historyStep < history.length - 1) history = history.slice(0, historyStep + 1); history.push(canvas.toDataURL()); historyStep++; }
+        function undo() { if (historyStep > 0) { historyStep--; const i = new Image(); i.src = history[historyStep]; i.onload = () => { ctx.clearRect(0,0,canvas.width,canvas.height); ctx.drawImage(i,0,0); }; } }
+        function clearCanvas() { if(confirm('全部消してもよかですか？')) { ctx.clearRect(0,0,canvas.width,canvas.height); saveHistory(); } }
     </script>
 </body>
 </html>
